@@ -1,0 +1,9 @@
+ccxt
+websockets
+aiostream
+aiosqlite
+aioitertools
+
+pytz
+pyarrow
+dask

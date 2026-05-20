@@ -1,0 +1,31 @@
+# labels.py
+
+BIDS = 'bids'
+ASKS = 'asks'
+BID_PRICE = 'bid_price'
+BID_QUANTITY = 'bid_quantity'
+ASK_PRICE = 'ask_price'
+ASK_QUANTITY = 'ask_quantity'
+MID = 'mid'
+WIDTH = 'width'
+PRICE = 'price'
+QUANTITY = 'quantity'
+SIDE = 'side'
+BUY = 'buy'
+SELL = 'sell'
+HOLD = 'hold'
+LOCAL_TIMESTAMP = 'local_timestamp'
+BOOKS_TIMESTAMP = 'books_timestamp'
+TRADES_TIMESTAMP = 'trades_timestamp'
+LABEL = 'label'
+EXCHANGE = 'exchange'
+SYMBOL = 'symbol'
+TIMESTAMP = 'timestamp'
+
+BOOK_VALUE_LABELS = {BID_PRICE, BID_QUANTITY, ASK_PRICE, ASK_QUANTITY, BIDS, ASKS}
+TRADE_VALUE_LABELS = {PRICE, QUANTITY, SIDE}
+TIME_COLUMNS = {TIMESTAMP, TRADES_TIMESTAMP, BOOKS_TIMESTAMP}
+NON_FLOAT_COLUMNS = {BIDS, ASKS, SIDE, EXCHANGE, SYMBOL}
+FULL_INDEX_COLUMNS = {EXCHANGE, SYMBOL, *TIME_COLUMNS}
+INDEX_COLUMNS = {EXCHANGE, SYMBOL, TIMESTAMP}
+FUTURE_TIME_MAP = {l: f"future_{l}" for l in TIME_COLUMNS}
