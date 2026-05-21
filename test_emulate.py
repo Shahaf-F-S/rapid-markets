@@ -13,7 +13,7 @@ async def run(
     db: MarketDatabase,
     callbacks: IterativeCallbacks
 ):
-    with alive_bar(title='Computing Features', monitor='{count}') as bar:
+    with alive_bar(title='Emulating', monitor='{count}') as bar:
         async for data in db.simulate_market(limits):
             callbacks(data)
             bar()
