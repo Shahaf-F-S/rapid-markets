@@ -24,10 +24,9 @@ async def run(
 
 async def main():
     controller = Control()
-    symbols = {CCXTFeed('binance'): {'BTC/USDT'}}
+    symbols = {CCXTFeed('binance'): {'BTC/USDT', 'ETH/USDT'}}
 
     path = 'database/database.db'
-
     market_db = MarketDatabase(path)
     await market_db.connect()
     calls = AsyncGatherCallbacks().collect(market_db.insert)
