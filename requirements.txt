@@ -7,3 +7,7 @@ aioitertools
 pytz
 pyarrow
 dask
+
+numpy
+torch
+lightgbm

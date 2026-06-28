@@ -19,7 +19,7 @@ async def main():
 
     with control, alive_bar(title='Recording', monitor='{count}') as bar:
         async for data in watch_data(symbols, control=control):
-            await db.insert(data)
+            await db.insert(data.data())
             bar()
 
     await db.close()
