@@ -12,12 +12,11 @@ from typing import AsyncGenerator, Iterable, Callable, Sequence
 import json
 from itertools import batched
 
-from aioitertools import zip as azip
-
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from rapid_markets.base import labels, Control
+from rapid_markets.base import Control
+import rapid_markets.base.labels as labels
 
 
 __all__ = [
@@ -231,9 +230,6 @@ class TableLimits:
         return cls(**data)
 
 
-type Data = dict[str, ...]
-
-
 # noinspection PyUnhashable
 ADAPTERS = {
     dt.datetime: 'DATETIME',
@@ -245,6 +241,9 @@ ADAPTERS = {
     int: 'NUMERIC',
     str: 'TEXT'
 }
+
+
+type Data = dict[str, ...]
 
 
 @dataclass(slots=True, frozen=True)
@@ -474,74 +473,6 @@ class BaseDatabase(ABC):
                 except StopAsyncIteration:
                     break
 
-    async def select_future(
-        self, limits: TableLimits, future: int | dt.timedelta,
-    ) -> AsyncGenerator[TimePair, None, None]:
-        self._validate_connection()
-
-        if limits.table is None:
-            raise ValueError('table must be defined.')
-
-        cols = limits.columns or (await self.columns(limits.table))
-
-        p_cols = ", ".join([f'p."{c}" AS "p_{c}"' for c in cols])
-        f_cols = ", ".join([f'f."{c}" AS "f_{c}"' for c in cols])
-
-        where_clause = f"WHERE p.{labels.EXCHANGE} = ? AND p.{labels.SYMBOL} = ?"
-        params: list = [limits.exchange, limits.symbol]
-
-        if limits.start_time:
-            where_clause += f" AND p.{labels.TIMESTAMP} >= ?"
-            params.append(limits.start_time)
-
-        if limits.end_time:
-            where_clause += f" AND p.{labels.TIMESTAMP} <= ?"
-            params.append(limits.end_time)
-
-        # noinspection PyTypeChecker
-        connection: aiosqlite.Connection = self.connection
-
-        if isinstance(future, int):
-            query = f"""
-                WITH Filtered AS (
-                    SELECT *, ROW_NUMBER() OVER (ORDER BY {labels.TIMESTAMP}) as _rn
-                    FROM {limits.table} p {where_clause}
-                )
-                SELECT {p_cols.replace('p.', 'n1.')}, {f_cols.replace('f.', 'n2.')}
-                FROM Filtered n1 JOIN Filtered n2 ON n2._rn = n1._rn + ?
-                ORDER BY n1.{labels.TIMESTAMP}
-            """
-
-            async with connection.execute(query, params + [future]) as cursor:
-                async for row in cursor:
-                    dict_row = dict(row)
-                    past_dict = {c: dict_row[f"p_{c}"] for c in cols}
-                    future_dict = {c: dict_row[f"f_{c}"] for c in cols}
-                    yield TimePair(past=past_dict, future=future_dict, difference=future)
-
-        else:
-            offset_modifier = f"{future.total_seconds():+} seconds"
-            query_params = [offset_modifier] + params
-            query = f"""
-                    SELECT {p_cols}, {f_cols}
-                    FROM {limits.table} p
-                    JOIN {limits.table} f ON f.rowid = (
-                        SELECT rowid FROM {limits.table}
-                        WHERE {labels.EXCHANGE} = p.{labels.EXCHANGE}
-                          AND {labels.SYMBOL} = p.{labels.SYMBOL}
-                          AND {labels.TIMESTAMP} >= datetime(p.{labels.TIMESTAMP}, ?)
-                        ORDER BY {labels.TIMESTAMP} LIMIT 1
-                    )
-                    {where_clause} ORDER BY p.{labels.TIMESTAMP} ASC
-                """
-
-            async with connection.execute(query, query_params) as cursor:
-                async for row in cursor:
-                    dict_row = dict(row)
-                    past_dict = {c: dict_row[f"p_{c}"] for c in cols}
-                    future_dict = {c: dict_row[f"f_{c}"] for c in cols}
-                    yield TimePair(past=past_dict, future=future_dict, difference=future)
-
     async def select_future_multi(
         self,
         limits: TableLimits,
@@ -645,14 +576,6 @@ class BaseDatabase(ABC):
                     pairs[table] = TimePair(past=a_past_dict, future=a_future_dict, difference=future)
 
                 yield pairs
-
-    async def select_futures(
-        self, limits: TableLimits, futures: Iterable[int | dt.timedelta],
-    ) -> AsyncGenerator[dict[int | dt.timedelta, TimePair], None, None]:
-        self._validate_connection()
-
-        async for data in azip(*(self.select_future(limits, future) for future in futures)):
-            yield {pair.difference: pair for pair in data}
 
     @staticmethod
     def save_parquet(data: list[Data], file_path: str | Path):

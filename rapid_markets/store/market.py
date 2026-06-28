@@ -7,7 +7,7 @@ from typing import AsyncGenerator, Iterable
 
 from aioitertools import zip as azip
 
-from rapid_markets.base import labels
+import rapid_markets.base.labels as labels
 from rapid_markets.store.database import BaseDatabase, Data, TableLimits, TimePair
 from rapid_markets.source import Book, Trade
 
