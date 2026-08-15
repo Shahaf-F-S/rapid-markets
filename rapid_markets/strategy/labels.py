@@ -67,7 +67,7 @@ class TripleBarrierConfig:
     max_steps: int = 200
     # Minimum price move to be considered a Buy/Sell (in bps)
     # Trades with expected return below this after costs → Hold
-    min_return_bps: float = 10
+    min_return_bps: float = 1
     # Transaction cost model: one-way cost as fraction of mid
     # (half-spread at entry + half-spread at exit)
     cost_bps: float = 10

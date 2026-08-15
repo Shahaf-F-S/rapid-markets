@@ -8,6 +8,7 @@ pytz
 pyarrow
 dask
 
+pandas
 numpy
 torch
 lightgbm

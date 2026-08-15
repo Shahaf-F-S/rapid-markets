@@ -28,6 +28,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
@@ -665,7 +666,7 @@ class LightGBMQuantileModel(BaseReturnModel):
         )
 
     def predict(self, snapshot: Snapshot) -> QuantileOutput:
-        x = snapshot.to_array(FEATURE_NAMES).reshape(1, -1)
+        x = pd.DataFrame([snapshot.to_array(FEATURE_NAMES)], columns=FEATURE_NAMES)
         result: dict[int, dict[float, float]] = {}
 
         for action in [Action.BUY, Action.SELL, Action.HOLD]:
