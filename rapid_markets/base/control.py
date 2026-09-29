@@ -34,7 +34,7 @@ class Control:
     times: list[dt.datetime] = field(default_factory=list)
     running: bool = True
 
-    def on_catch_message(self: Control, exception: Exception):
+    def on_catch_message(self: Control, exception: Exception) -> str:
         name = f'[{self.name}] ' if self.name else ''
         return f'{name}{type(exception).__name__}:\n\t{exception}'
 
