@@ -12,3 +12,5 @@ pandas
 numpy
 torch
 lightgbm
+
+# pip uninstall aiodns pycares -y

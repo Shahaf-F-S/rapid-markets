@@ -111,7 +111,7 @@ class Control:
     def run(self) -> bool:
         if (not self.running) or (
             (self.timeout and dt.datetime.now() > (self.start + self.timeout)) or
-            (len(self.times) == self.max_fails)
+            (len(self.times) >= self.max_fails)
         ):
             self.stop()
 
@@ -124,13 +124,11 @@ class Control:
 
     def step(self):
         t = dt.datetime.now()
-        times = self.times
 
-        if times and t - times[-1] < self.interval:
-            times.append(t)
+        if self.times and t - self.times[-1] >= self.interval:
+            self.times.clear()
 
-        elif times:
-            times.pop(-1)
+        self.times.append(t)
 
     def copy(self, name: str, *, state: bool = False, deep: bool = False) -> Control:
         if not state:

@@ -1,9 +1,9 @@
 # record.py
 
+import asyncio
 import datetime as dt
-from typing import AsyncGenerator, Iterable, Literal
-import warnings
-from aiostream import stream
+from collections.abc import Iterable
+from typing import Self
 
 from ccxt.base.errors import NetworkError
 
@@ -13,126 +13,216 @@ from rapid_markets.source.feed import ExchangeFeed
 
 
 __all__ = [
-    "watch_trades",
+    "Watcher",
+    "watch_market",
     "watch_books",
-    "watch_symbol_trades",
-    "watch_symbol_book",
+    "watch_trades",
+    "Kind",
     "Control",
-    "NetworkError",
-    "watch"
+    "NetworkError"
 ]
 
 
-async def watch_symbol_book(
-    feed: ExchangeFeed, symbol: str, control: Control
-) -> AsyncGenerator[Book, None, None]:
-    while control.run():
-        if not feed.active:
-            continue
+type Kind = type[Book] | type[Trade]
+type Item = Book | Trade
+type Stream = tuple[ExchangeFeed, str, Kind]
+
+
+class Watcher:
+    """
+    Async iterator of Book / Trade objects for every (feed, symbol, kind)
+    combination, in the order the exchanges deliver them.
+
+    One fetch task runs per combination. When a fetch completes, its items
+    are queued and the fetch is re-issued at once, so the output order is
+    set by the servers alone.
+
+    While the watcher is running, these take effect immediately:
+    - feeds added or removed with `add` / `remove`;
+    - kinds replaced by assigning `watcher.kinds = (Book,)`;
+    - changes made on a feed itself (`add`, `remove`, `extend`, `reduce`,
+      `activate`, `deactivate`, or setting `active`).
+
+    The control governs the whole watcher: iteration ends when it stops or
+    times out, and fetch errors go through it. An error it catches is
+    retried after `feed.sleep`; any other error, or the one that exhausts
+    `max_fails`, ends the iteration by being raised. For separate controls
+    per feed, use a watcher per control.
+
+        async with watch_market(feeds, control) as watcher:
+            async for item in watcher:
+                ...
+    """
+
+    def __init__(
+        self,
+        feeds: Iterable[ExchangeFeed],
+        control: Control,
+        kinds: Iterable[Kind] = (Book, Trade)
+    ):
+        self.feeds: set[ExchangeFeed] = set(feeds)
+        self.control = control
+
+        self._kinds: frozenset[Kind] = frozenset(kinds)
+        self._tasks: dict[Stream, asyncio.Task] = {}
+        self._queue: asyncio.Queue[Item | BaseException | None] = asyncio.Queue()
+        self._running = False
+
+    @property
+    def kinds(self) -> frozenset[Kind]:
+        return self._kinds
+
+    @kinds.setter
+    def kinds(self, kinds: Iterable[Kind]) -> None:
+        self._kinds = frozenset(kinds)
+
+        if self._running:
+            for feed in self.feeds:
+                self._sync(feed)
+
+    def books_only(self) -> Self:
+        self.kinds = (Book,)
+        return self
+
+    def trades_only(self) -> Self:
+        self.kinds = (Trade,)
+        return self
+
+    def union(self) -> Self:
+        self.kinds = (Book, Trade)
+        return self
+
+    def add(self, *feeds: ExchangeFeed) -> None:
+        for feed in feeds:
+            self.feeds.add(feed)
+
+            if self._running:
+                feed.listen(self._sync)
+                self._sync(feed)
+
+    def remove(self, *feeds: ExchangeFeed) -> None:
+        for feed in feeds:
+            self.feeds.discard(feed)
+
+            if self._running:
+                feed.unlisten(self._sync)
+                self._sync(feed)
+
+    def stop(self) -> None:
+        self.control.stop()
+        self._queue.put_nowait(None)  # wake a pending __anext__
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> Item:
+        if not self._running:
+            self._running = True
+
+            for feed in self.feeds:
+                feed.listen(self._sync)
+                self._sync(feed)
+
+        item = await self._next()
+
+        if isinstance(item, Book | Trade):
+            return item
+
+        await self.aclose()
+        raise item or StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self._running = False
+
+        for feed in self.feeds:
+            feed.unlisten(self._sync)
+
+        tasks = tuple(self._tasks.values())
+        self._tasks.clear()
+
+        for task in tasks:
+            task.cancel()
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        self._queue = asyncio.Queue()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info) -> None:
+        await self.aclose()
+
+    async def _next(self) -> Item | BaseException | None:
+        """The next queued item or error; None once the control ends."""
+        if not self.control.run():
+            return None
+
+        control = self.control
+        remaining = None if control.timeout is None else (
+            (control.start + control.timeout - dt.datetime.now()).total_seconds()
+        )
 
         try:
-            orderbook = await feed.watch_order_book(symbol)
+            async with asyncio.timeout(remaining):
+                return await self._queue.get()
 
-            bids, asks = orderbook['bids'], orderbook['asks']
+        except TimeoutError:
+            return None
 
-            if bids and asks:
-                yield Book(
-                    timestamp=dt.datetime.now(dt.UTC),
-                    exchange=feed.name, symbol=symbol,
-                    bids=bids, asks=asks
-                )
+    def _sync(self, feed: ExchangeFeed) -> None:
+        wanted = {
+            (feed, symbol, kind)
+            for symbol in feed.subscribed
+            for kind in self._kinds
+        } if feed in self.feeds and feed.active else set()
 
-        except Exception as e:
-            warnings.warn(
-                f"[{feed.name}: {symbol}] orderbook - "
-                f"{type(e).__name__}: {e}"
-            )
+        current = {stream for stream in self._tasks if stream[0] is feed}
 
+        for stream in current - wanted:
+            self._tasks.pop(stream).cancel()
 
-async def watch_symbol_trades(
-    feed: ExchangeFeed, symbol: str, control: Control
-) -> AsyncGenerator[Trade, None, None]:
-    while control.run():
-        if not feed.active:
-            continue
+        for stream in wanted - current:
+            self._start(stream)
 
-        try:
-            trades = await feed.watch_trades(symbol)
+    def _start(self, stream: Stream) -> None:
+        task = asyncio.create_task(self._fetch(*stream))
+        task.add_done_callback(lambda t: self._on_done(stream, t))
+        self._tasks[stream] = task
 
-            for trade_data in trades:
-                yield Trade(
-                    timestamp=dt.datetime.now(dt.UTC),
-                    exchange=feed.name, symbol=symbol,
-                    price=trade_data['price'], quantity=trade_data['amount'],
-                    side=trade_data['side'].capitalize()
-                )
+    def _on_done(self, stream: Stream, task: asyncio.Task) -> None:
+        if self._tasks.get(stream) is not task:
+            return
 
-        except Exception as e:
-            warnings.warn(
-                f"[{feed.name}: {symbol}] orderbook - "
-                f"{type(e).__name__}: {e}"
-            )
-            raise e
+        if (error := task.exception()) is not None:
+            self._queue.put_nowait(error)
+            return
 
+        self._start(stream)
 
-async def watch_feeds(
-    feeds: Iterable[ExchangeFeed],
-    control: Control,
-    gen: Literal[watch_symbol_book, watch_symbol_trades]
-) -> AsyncGenerator[Book | Trade, None, None]:
-    tasks = []
+        for item in task.result():
+            self._queue.put_nowait(item)
 
-    for feed in feeds:
-        for symbol in feed.subscribed:
-            tasks.append(gen(feed=feed, symbol=symbol, control=control))
+    async def _fetch(self, feed: ExchangeFeed, symbol: str, kind: Kind) -> list[Item]:
+        fetch = feed.books if kind is Book else feed.trades
 
-    merged = stream.merge(*tasks)
+        while True:
+            with self.control:
+                # noinspection argument-list
+                return await fetch(symbol)
 
-    async with merged.stream() as streamer:
-        async for item in streamer:
-            yield item
+            # Reached only when the control caught the error: retry.
+            # noinspection unreachable-code
+            await asyncio.sleep(feed.sleep)
 
 
-async def watch_books(
-    feeds: Iterable[ExchangeFeed], control: Control
-) -> AsyncGenerator[Book, None, None]:
-    tasks = []
-
-    for feed in feeds:
-        for symbol in feed.subscribed:
-            tasks.append(watch_symbol_book(feed=feed, symbol=symbol, control=control))
-
-    merged = stream.merge(*tasks)
-
-    async with merged.stream() as streamer:
-        async for item in streamer:
-            yield item
+def watch_books(feeds: Iterable[ExchangeFeed], control: Control) -> Watcher:
+    return Watcher(feeds, control, (Book,))
 
 
-async def watch_trades(
-    feeds: Iterable[ExchangeFeed], control: Control
-) -> AsyncGenerator[Trade, None, None]:
-    tasks = []
-
-    for feed in feeds:
-        for symbol in feed.subscribed:
-            tasks.append(watch_symbol_trades(feed=feed, symbol=symbol, control=control))
-
-    merged = stream.merge(*tasks)
-
-    async with merged.stream() as streamer:
-        async for item in streamer:
-            yield item
+def watch_trades(feeds: Iterable[ExchangeFeed], control: Control) -> Watcher:
+    return Watcher(feeds, control, (Trade,))
 
 
-async def watch(feeds: Iterable[ExchangeFeed], control: Control) -> AsyncGenerator[Book | Trade, None, None]:
-    watches = [
-        watch_trades(feeds, control=control),
-        watch_books(feeds, control=control)
-    ]
-
-    merged = stream.merge(*watches)
-
-    async with merged.stream() as streamer:
-        async for item in streamer:
-            yield item
+def watch_market(feeds: Iterable[ExchangeFeed], control: Control) -> Watcher:
+    return Watcher(feeds, control, (Trade, Book))
