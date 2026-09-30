@@ -5,8 +5,6 @@ import datetime as dt
 from collections.abc import Iterable
 from typing import Self
 
-from ccxt.base.errors import NetworkError
-
 from rapid_markets.base.control import Control
 from rapid_markets.source.data import Book, Trade
 from rapid_markets.source.feed import ExchangeFeed
@@ -18,8 +16,7 @@ __all__ = [
     "watch_books",
     "watch_trades",
     "Kind",
-    "Control",
-    "NetworkError"
+    "Control"
 ]
 
 
@@ -73,7 +70,7 @@ class Watcher:
         return self._kinds
 
     @kinds.setter
-    def kinds(self, kinds: Iterable[Kind]) -> None:
+    def kinds(self, kinds: Iterable[Kind]):
         self._kinds = frozenset(kinds)
 
         if self._running:
@@ -92,7 +89,7 @@ class Watcher:
         self.kinds = (Book, Trade)
         return self
 
-    def add(self, *feeds: ExchangeFeed) -> None:
+    def add(self, *feeds: ExchangeFeed) -> Self:
         for feed in feeds:
             self.feeds.add(feed)
 
@@ -100,13 +97,17 @@ class Watcher:
                 feed.listen(self._sync)
                 self._sync(feed)
 
-    def remove(self, *feeds: ExchangeFeed) -> None:
+        return self
+
+    def remove(self, *feeds: ExchangeFeed) -> Self:
         for feed in feeds:
             self.feeds.discard(feed)
 
             if self._running:
                 feed.unlisten(self._sync)
                 self._sync(feed)
+
+        return self
 
     def stop(self) -> None:
         self.control.stop()
