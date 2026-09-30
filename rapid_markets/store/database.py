@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict, fields
-from typing import AsyncGenerator, Iterable, Callable, Sequence
+from typing import AsyncGenerator, Iterable, Callable, Sequence, Self
 import json
 from itertools import batched
 
@@ -276,6 +276,13 @@ class BaseDatabase(ABC):
         self.connection: aiosqlite.Connection | None = None
         self.adapted: dict[str, set[str]] = {}
         self.timeout = timeout
+
+    async def __aenter__(self) -> Self:
+        await self.connect()
+        return self
+
+    async def __aexit__(self, *exc_info):
+        await self.close()
 
     def _validate_connection(self):
         if self.connection is None:
@@ -608,6 +615,7 @@ class BaseDatabase(ABC):
             chunk_data.append(row)
 
             if on_tick:
+                # noinspection calling-non-callable
                 on_tick()
 
             if len(chunk_data) >= chunk_size:
@@ -794,7 +802,7 @@ class DataCompressor:
     queue: asyncio.Queue[DataKey] = field(default_factory=asyncio.Queue)
     batch_size: int = 10000
     archive_batch_size: int = 50000
-    archive_dir: Path = None
+    archive_dir: Path | None = None
     retention_period = dt.timedelta(days=3)
     archive_step = dt.timedelta(days=2)
     counts: dict[DataKey, int] = field(default_factory=dict)

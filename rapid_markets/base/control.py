@@ -2,7 +2,7 @@
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Self
 import warnings
 
 from ccxt.base.errors import NetworkError
@@ -91,8 +91,8 @@ class Control:
             name=name, timeout=timeout, on_catch=warn_on_catch
         )
 
-    def __enter__(self):
-        pass
+    def __enter__(self) -> Self:
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if not isinstance(exc_val, tuple(self.catch)):

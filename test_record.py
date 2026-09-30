@@ -10,22 +10,22 @@ from rapid_markets.store import MarketDatabase
 
 
 async def main():
-    control = Control()
-
     symbols = {Feed('binance').extend({'BTC/USDT', 'ETH/USDT'})}
 
     path = 'database/database.db'
-    db = MarketDatabase(path)
-    await db.connect()
 
-    with control, alive_bar(title='Recording', monitor='{count}') as bar:
-        async with watch_market(symbols, control=control) as watcher:
+    with (
+        Control() as control,
+        alive_bar(title='Recording', monitor='{count}') as bar
+    ):
+        async with (
+            MarketDatabase(path) as db,
+            watch_market(symbols, control) as watcher
+        ):
             async for data in watcher:
                 print(data)
                 await db.insert(data.data())
                 bar()
-
-    await db.close()
 
 
 if __name__ == '__main__':
